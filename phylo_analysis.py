@@ -1,37 +1,26 @@
 #!/usr/bin/env python3
 
 import sys
-import os
 import argparse
-from Bio import SeqIO, Entrez, AlignIO
-from Bio.Seq import Seq
-from Bio.Blast import NCBIWWW, NCBIXML
-from Bio.Align.Applications import ClustalOmegaCommandline
-from Bio import Phylo
-from Bio.Phylo.TreeConstruction import DistanceCalculator, DistanceTreeConstructor
-import matplotlib.pyplot as plt
-import time
-import re
+from Bio import AlignIO
 
-import numpy as np
-import requests
-
-from Bio import SeqIO, Entrez, Phylo
+from Bio import Entrez, SeqIO, Phylo
 from Bio.Blast import NCBIWWW, NCBIXML
 
 from Bio.SeqRecord import SeqRecord
 from Bio.Seq import Seq
 
-from Bio.Align import MultipleSeqAlignment
-from Bio import Align
-
 from Bio.Phylo.TreeConstruction import DistanceCalculator, DistanceTreeConstructor
+
+from Bio.Align.Applications import ClustalOmegaCommandline
 
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
 import os
+
+from matplotlib.colors import to_rgba
 
 def get_info(filename):
     from re import sub, search
@@ -212,21 +201,11 @@ def run_blast(sequence, max_hits=50):
 
     result_handle = NCBIWWW.qblast("blastp", "nr", sequence, hitlist_size=max_hits)
 
-    # result_handle = NCBIWWW.qblast("blastp", "nr", data['Homo sapiens'])
-    # breakpoint()
-
     with open("helper_files/blast_results.xml", "w") as out_file:
         out_file.write(result_handle.read())
 
     result_handle.close()
-    # # Save raw BLAST results for reference
-    # with open("blast_results.xml", "w") as out_handle:
-    #     out_handle.write(result_handle.read())
 
-    # with open("/home/joaomonteiro/Desktop/BIOINF/BioInf/blast_results2.xml") as result_file:
-    #     blast_records = NCBIXML.read(result_file)
-    #
-    # return blast_records
 
 
 def read_blast():
@@ -235,16 +214,14 @@ def read_blast():
 
     return blast_records
 
-    # # Re-open for parsing
-    # result_handle = open("blast_results.xml")
-    # return NCBIXML.parse(result_handle)
+Entrez.email = "joaomonteiro1111@gmail.com"
 
-
-def get_filtered_sequences(blast_records, n=10):
+def get_filtered_sequences(blast_records, seq_input, n=10):
     unique_names = set()
     i = 0
 
     with open("helper_files/filtered_sequences.fasta", "w") as fasta_file:
+        fasta_file.write(f">{seq_input.id}\n{seq_input.seq}\n\n")
 
         for alignment in blast_records.alignments:
             if i == n:
@@ -255,45 +232,105 @@ def get_filtered_sequences(blast_records, n=10):
             idx_2 = alignment_str.find("]")
 
             if idx_1 != -1 and idx_2 != -1:  # Ensure both brackets exist
-                # breakpoint()
                 full_name = alignment_str[idx_1 + 1: idx_2]  # Extract text inside brackets
                 name_parts = full_name.split()  # Split into words
                 name = " ".join(name_parts[:2])  # Get only the first two words
 
-            # print(name)
 
-            if name == "Homo sapiens" or name == "synthetic construct":
+            if name == "synthetic construct":
                 continue
 
             if name not in unique_names:
                 unique_names.add(name)
 
+                accession = alignment.accession
 
-                for hsp in alignment.hsps:
-                    # breakpoint()
+                handle = Entrez.efetch(db="protein", id=accession, rettype="fasta", retmode="text")
+                seq_record = SeqIO.read(handle, "fasta")
+                handle.close()
 
-                    sequence = hsp.sbjct
+                sequence = seq_record.seq
+                fasta_file.write(f">{name}\n{sequence}\n\n")
 
-                    fasta_file.write(f">{name}\n{sequence}\n\n")
+                # for hsp in alignment.hsps:
+                #
+                #     sequence = hsp.sbjct
+                #
+                #     fasta_file.write(f">{name}\n{sequence}\n\n")
 
                 i += 1
 
-    # print(unique_names)
 
-    sequences = read_fasta("helper_files/filtered_sequences.fasta")
+def perform_msa():
 
-    return sequences
+    clustalomega_cline = ClustalOmegaCommandline(infile="helper_files/filtered_sequences.fasta", outfile="helper_files/aligned.fasta", verbose=True,
+                                                 auto=True, force=True)
+    clustalomega_cline()
+
+def get_alignment():
+
+    alignment = AlignIO.read("helper_files/aligned.fasta", "fasta")
+
+    for record in alignment:
+        record.id = record.description
+
+    return alignment
+
+def get_msa_colored_alignment(alignment):
+
+    num_seqs = len(alignment)
+    seq_len = alignment.get_alignment_length()
+
+    # Identify only columns where there are differences
+    variable_cols = [i for i in range(seq_len) if len(set(alignment[:, i])) > 1]
+
+    # Residue color map
+    residues = "ACDEFGHIKLMNPQRSTVWY"
+    color_map = {res: to_rgba(plt.cm.tab20(i / 20)) for i, res in enumerate(residues)}
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(len(variable_cols) * 0.6, (num_seqs + 1) * 0.6))
+
+    ax.text(-0.7, len(alignment) + 0.5, "ID →", ha='center', va='center', fontsize=15, fontweight='bold')
+    ax.text(-3.7, len(alignment) + 0.5, "Specie ↓", ha='center', va='center', fontsize=15, fontweight='bold')
+
+    # Plot residue letters
+    for row_idx, record in enumerate(alignment):
+        ax.text(-3.7, row_idx + 1, record.id, ha='center', va='center', fontsize=15, fontweight='bold')
+        for col_idx, aln_col in enumerate(variable_cols):
+            res = record.seq[aln_col]
+            color = color_map.get(res, to_rgba("lightgray", alpha=0.5))
+            ax.text(col_idx, row_idx + 1, res, ha='center', va='center', fontsize=12, fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor=color, edgecolor='none'))
+
+    # Plot column numbers ABOVE the letters
+    for col_idx, aln_col in enumerate(variable_cols):
+        ax.text(col_idx, len(alignment) + 0.5, str(aln_col + 1), ha='center', va='center', fontsize=15,
+                fontweight='bold', color='black')
+
+    # Format plot
+    ax.set_xticks([])
+    ax.set_yticks(range(1, num_seqs + 1))
+    ax.set_yticklabels([record.id for record in alignment])
+    ax.set_xlim(-0.5, len(variable_cols) - 0.5)
+    ax.set_ylim(-0.5, num_seqs + 1)
+    ax.axis('off')
+
+    # Save
+    plt.tight_layout()
+
+    plt.savefig("figures/msa_colored_alignment.png", dpi=300, bbox_inches='tight')
+
+    print("MSA Colored Alignment saved to figures/msa_colored_alignment.png")
+
 
 
 def main():
     """Main function to run the phylogenetic analysis pipeline"""
 
-
-    # Set up arguments
     args = setup_arguments()
 
     print(f"Starting phylogenetic analysis for {args.sequence_file} with {args.num_species} species")
-    # breakpoint()
 
     os.makedirs("figures", exist_ok=True)
     os.makedirs("helper_files", exist_ok=True)
@@ -318,54 +355,65 @@ def main():
     sequence_type = detect_sequence_type(sequence)
     print(f"\nDetected sequence type: {sequence_type}")
 
-    # breakpoint()
 
     if sequence_type == "DNA":
         sequence_dna = sequence
         sequence = pre_process(sequence)[0]
 
 
-
-    # print(sequence)
-
     # run_blast(sequence)  # Always search protein database
     blast_records = read_blast()
 
-
-    filtered_sequences = get_filtered_sequences(blast_records, n=n)
-    # breakpoint()
-
     seq_input = SeqRecord(Seq(sequence), id=name)
 
-    # breakpoint()
-
-    records = [SeqRecord(Seq(filtered_sequences[name]), id=name[1:]) for name in filtered_sequences]
-    records.insert(0, seq_input)
-    # breakpoint()
-
-    SeqIO.write(records, "helper_files/filtered_sequences.fasta", "fasta")
-
-    from Bio.Align.Applications import ClustalOmegaCommandline
-
-    clustalomega_cline = ClustalOmegaCommandline(infile="helper_files/filtered_sequences.fasta", outfile="helper_files/aligned.fasta", verbose=True,
-                                                 auto=True, force=True)
-    clustalomega_cline()
-
-    print(clustalomega_cline)
-    breakpoint()
-
-    from Bio import AlignIO
-    alignment = AlignIO.read("helper_files/aligned.fasta", "fasta")
+    get_filtered_sequences(blast_records, seq_input, n=n)
 
 
+    perform_msa()
 
-    for record in alignment:
-        record.id = record.description[:-22]
-        # print(record.id)
+    alignment = get_alignment()
 
-    # breakpoint()
+    num_seqs = len(alignment)
+    seq_len = alignment.get_alignment_length()
 
+    # Identify only columns where there are differences
+    variable_cols = [i for i in range(seq_len) if len(set(alignment[:, i])) > 1]
 
+    # Residue color map
+    residues = "ACDEFGHIKLMNPQRSTVWY"
+    color_map = {res: to_rgba(plt.cm.tab20(i / 20)) for i, res in enumerate(residues)}
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(len(variable_cols) * 0.6, (num_seqs + 1) * 0.6))
+
+    ax.text(-0.7, len(alignment)+0.5,"ID →", ha='center', va='center', fontsize=15, fontweight='bold')
+    ax.text(-3.7, len(alignment)+0.5,"Specie ↓", ha='center', va='center', fontsize=15, fontweight='bold')
+
+    # Plot residue letters
+    for row_idx, record in enumerate(alignment):
+        ax.text(-3.7, row_idx + 1, record.id, ha='center', va='center', fontsize=15, fontweight='bold')
+        for col_idx, aln_col in enumerate(variable_cols):
+            res = record.seq[aln_col]
+            color = color_map.get(res, to_rgba("lightgray", alpha=0.5))
+            ax.text(col_idx, row_idx + 1, res, ha='center', va='center', fontsize=12, fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor=color, edgecolor='none'))
+
+    # Plot column numbers ABOVE the letters
+    for col_idx, aln_col in enumerate(variable_cols):
+        ax.text(col_idx, len(alignment)+0.5, str(aln_col + 1), ha='center', va='center', fontsize=15, fontweight='bold', color='black')
+
+    # Format plot
+    ax.set_xticks([])
+    ax.set_yticks(range(1, num_seqs + 1))
+    ax.set_yticklabels([record.id for record in alignment])
+    ax.set_xlim(-0.5, len(variable_cols) - 0.5)
+    ax.set_ylim(-0.5, num_seqs + 1)
+    ax.axis('off')
+
+    # Save
+    plt.tight_layout()
+
+    plt.savefig("figures/msa_colored_alignment.png", dpi=300, bbox_inches='tight')
 
     calculator = DistanceCalculator('identity')
     distance_matrix = calculator.get_distance(alignment)
@@ -376,37 +424,20 @@ def main():
 
     Phylo.write(tree, "figures/phylogenetic_tree.nwk", "newick", branch_length_only=True)
 
+    for clade in tree.find_clades():
+        if not clade.is_terminal():
+            clade.name = None
 
-    fig = plt.figure(figsize=(12, 8))
+    fig = plt.figure(figsize=(12, 10))
     ax = fig.add_subplot(1, 1, 1)
+
     Phylo.draw(tree, axes=ax, branch_labels=lambda c: f"{c.branch_length:.3f}")
+
+
     plt.savefig("figures/tree_co.png", dpi=300, bbox_inches='tight')
-
-
-
-
-    # import PyQt5
-
-    # from ete3 import Tree, TreeStyle
-    #
-    # # Read the tree from the Newick file you saved earlier
-    # t = Tree("figures/phylogenetic_tree.nwk", format=1)
-    # # breakpoint()
-    # # Customize tree style
-    # ts = TreeStyle()
-    # ts.mode = "r"  # "c" for circular, "r" for rectangular
-    # ts.scale = 20
-    # ts.show_branch_length = True
-    # ts.show_branch_support = True
-    #
-    # # Render and save the tree
-    # t.render("ete_circular_tree.png", tree_style=ts)
-
-    # breakpoint()
 
     names = distance_matrix.names
     matrix = np.array([[distance_matrix[i, j] for j in range(len(names))] for i in range(len(names))])
-
 
     # Create a heatmap
     plt.figure(figsize=(10, 8))
@@ -415,44 +446,6 @@ def main():
     plt.tight_layout()
     plt.savefig("figures/distance_matrix_heatmap_co.png")
 
-
-
-    # aligner = Align.PairwiseAligner()
-    alignment_sequential = MultipleSeqAlignment([seq_input])
-
-    for name in filtered_sequences.keys():
-        seq_specie = SeqRecord(Seq(filtered_sequences[name]), id=name[1:])
-        alignment_sequential.append(seq_specie)
-
-
-
-
-    calculator = DistanceCalculator('identity')
-    distance_matrix = calculator.get_distance(alignment_sequential)
-
-
-    # Construct tree using UPGMA
-    constructor = DistanceTreeConstructor()
-    tree = constructor.upgma(distance_matrix)
-
-
-    fig = plt.figure(figsize=(12, 8))
-    ax = fig.add_subplot(1, 1, 1)
-    Phylo.draw(tree, axes=ax, branch_labels=lambda c: f"{c.branch_length:.3f}")
-    plt.savefig("figures/tree_sq.png", dpi=300, bbox_inches='tight')
-    # breakpoint()
-
-
-    names = distance_matrix.names
-    matrix = np.array([[distance_matrix[i, j] for j in range(len(names))] for i in range(len(names))])
-
-    # Create a heatmap
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(matrix, annot=True, xticklabels=names, yticklabels=names, cmap="YlGnBu")
-    plt.title("Sequence Distance Matrix")
-    plt.tight_layout()
-    plt.savefig("figures/distance_matrix_heatmap_sq.png")
-    plt.show()
 
 
 if __name__ == "__main__":
