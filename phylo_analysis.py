@@ -252,12 +252,6 @@ def get_filtered_sequences(blast_records, seq_input, n=10):
                 sequence = seq_record.seq
                 fasta_file.write(f">{name}\n{sequence}\n\n")
 
-                # for hsp in alignment.hsps:
-                #
-                #     sequence = hsp.sbjct
-                #
-                #     fasta_file.write(f">{name}\n{sequence}\n\n")
-
                 i += 1
 
 
@@ -361,7 +355,7 @@ def main():
         sequence = pre_process(sequence)[0]
 
 
-    # run_blast(sequence)  # Always search protein database
+    run_blast(sequence)  # Always search protein database
     blast_records = read_blast()
 
     seq_input = SeqRecord(Seq(sequence), id=name)
@@ -446,6 +440,53 @@ def main():
     plt.tight_layout()
     plt.savefig("figures/distance_matrix_heatmap_co.png")
 
+
+
+    # -----------------
+    from Bio.Align import MultipleSeqAlignment
+    from Bio import Align
+
+    alignment_sequential = MultipleSeqAlignment([seq_input])
+
+    filtered_sequences = read_fasta("helper_files/filtered_sequences.fasta")
+    first = True
+    for name in filtered_sequences.keys():
+
+        seq_specie = SeqRecord(Seq(filtered_sequences[name]), id=name[1:])
+        if not first:
+            alignment_sequential.append(seq_specie)
+        first = False
+
+
+
+    calculator = DistanceCalculator('identity')
+    distance_matrix = calculator.get_distance(alignment_sequential)
+
+    constructor = DistanceTreeConstructor()
+    tree = constructor.upgma(distance_matrix)
+
+
+    for clade in tree.find_clades():
+        if not clade.is_terminal():
+            clade.name = None
+
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(1, 1, 1)
+
+    Phylo.draw(tree, axes=ax, branch_labels=lambda c: f"{c.branch_length:.3f}")
+
+    plt.savefig("figures/tree_sq.png", dpi=300, bbox_inches='tight')
+
+    names = distance_matrix.names
+    matrix = np.array([[distance_matrix[i, j] for j in range(len(names))] for i in range(len(names))])
+
+    # Create a heatmap
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(matrix, annot=True, xticklabels=names, yticklabels=names, cmap="YlGnBu")
+    plt.title("Sequence Distance Matrix")
+    plt.tight_layout()
+    plt.savefig("figures/distance_matrix_heatmap_sq.png")
+    plt.show()
 
 
 if __name__ == "__main__":
